@@ -4,9 +4,11 @@ import type { ChartConfiguration } from 'chart.js'
 import { query, getConnection, DATASET_VIEW } from '../lib/duckdb'
 import { ChartCanvas } from '../components/dashboard/ChartCanvas'
 import { FilterBar, type FilterState } from '../components/dashboard/FilterBar'
+import { RegionMap } from '../components/dashboard/RegionMap'
 import { Card } from '../components/ui/card'
 import { cn } from '../lib/utils'
 import { formatInt, formatPeso, withAlpha } from '../lib/format'
+import { makeHoverDim } from '../lib/charts'
 import { readPalette } from '../lib/theme'
 
 export const Route = createFileRoute('/dashboard')({ component: Dashboard })
@@ -173,38 +175,33 @@ function Dashboard() {
   }, [ready, runQueries])
 
   // --- STEP 3: build chart configs from query results ----------------------
-  const categoryConfig = useMemo<ChartConfiguration<'bar'>>(
-    () => ({
+  const categoryConfig = useMemo<ChartConfiguration<'bar'>>(() => {
+    const colors = byCategory.map((_, i) => palette[i % palette.length])
+    return {
       type: 'bar',
       data: {
         labels: byCategory.map((r) => r.category),
-        datasets: [
-          {
-            label: 'Total budget',
-            data: byCategory.map((r) => r.total_budget),
-            backgroundColor: byCategory.map((_, i) =>
-              withAlpha(palette[i % palette.length], 0.85),
-            ),
-          },
-        ],
+        datasets: [{ label: 'Total budget', data: byCategory.map((r) => r.total_budget), backgroundColor: colors }],
       },
       options: {
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
+        // Hover dims the other bars; click filters by that category (toggles).
+        onHover: makeHoverDim(colors),
+        onClick: (_e, active, chart) => {
+          if (!active.length) return
+          const label = chart.data.labels?.[active[0].index] as string | undefined
+          if (label) patch({ category: filters.category === label ? 'All' : label })
+        },
         plugins: {
           legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: (ctx) => ` ${formatPeso(ctx.parsed.x)}`,
-            },
-          },
+          tooltip: { callbacks: { label: (ctx) => ` ${formatPeso(ctx.parsed.x)}` } },
         },
         scales: { x: { ticks: { callback: (v) => formatPeso(Number(v)) } } },
       },
-    }),
-    [byCategory, palette],
-  )
+    }
+  }, [byCategory, palette, patch, filters.category])
 
   const yearConfig = useMemo<ChartConfiguration<'line'>>(
     () => ({
@@ -225,9 +222,19 @@ function Dashboard() {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        // Index mode: hovering anywhere on the x-axis shows that year's value.
+        interaction: { mode: 'index', intersect: false },
+        elements: { point: { radius: 2, hoverRadius: 5 } },
         plugins: {
           legend: { display: false },
-          tooltip: { callbacks: { label: (ctx) => ` ${formatPeso(ctx.parsed.y)}` } },
+          tooltip: {
+            mode: 'index',
+            intersect: false,
+            callbacks: {
+              title: (items) => `Year ${items[0]?.label ?? ''}`,
+              label: (ctx) => ` ${formatPeso(ctx.parsed.y)}`,
+            },
+          },
         },
         scales: { y: { ticks: { callback: (v) => formatPeso(Number(v)) } } },
       },
@@ -235,58 +242,44 @@ function Dashboard() {
     [byYear, palette],
   )
 
-  const statusConfig = useMemo<ChartConfiguration<'doughnut'>>(
-    () => ({
+  const statusConfig = useMemo<ChartConfiguration<'doughnut'>>(() => {
+    const colors = byStatus.map((_, i) => palette[i % palette.length])
+    return {
       type: 'doughnut',
-      data: {
-        labels: byStatus.map((r) => r.status),
-        datasets: [
-          {
-            data: byStatus.map((r) => r.n),
-            backgroundColor: byStatus.map(
-              (_, i) => palette[i % palette.length],
-            ),
-          },
-        ],
-      },
+      data: { labels: byStatus.map((r) => r.status), datasets: [{ data: byStatus.map((r) => r.n), backgroundColor: colors }] },
       options: {
         responsive: true,
         maintainAspectRatio: false,
+        onHover: makeHoverDim(colors),
         plugins: {
-          legend: { position: 'bottom' },
+          legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 } } },
           tooltip: { callbacks: { label: (ctx) => ` ${ctx.label}: ${formatInt(ctx.parsed)}` } },
         },
       },
-    }),
-    [byStatus, palette],
-  )
+    }
+  }, [byStatus, palette])
 
-  const contractorConfig = useMemo<ChartConfiguration<'bar'>>(
-    () => ({
+  const contractorConfig = useMemo<ChartConfiguration<'bar'>>(() => {
+    const colors = topContractors.map((_, i) => palette[i % palette.length])
+    return {
       type: 'bar',
       data: {
         labels: topContractors.map((r) => r.contractor),
-        datasets: [
-          {
-            label: 'Total budget',
-            data: topContractors.map((r) => r.total_budget),
-            backgroundColor: withAlpha(palette[2], 0.85),
-          },
-        ],
+        datasets: [{ label: 'Total budget', data: topContractors.map((r) => r.total_budget), backgroundColor: colors }],
       },
       options: {
         indexAxis: 'y',
         responsive: true,
         maintainAspectRatio: false,
+        onHover: makeHoverDim(colors),
         plugins: {
           legend: { display: false },
           tooltip: { callbacks: { label: (ctx) => ` ${formatPeso(ctx.parsed.x)}` } },
         },
         scales: { x: { ticks: { callback: (v) => formatPeso(Number(v)) } } },
       },
-    }),
-    [topContractors, palette],
-  )
+    }
+  }, [topContractors, palette])
 
   if (error) {
     return (
@@ -328,11 +321,20 @@ function Dashboard() {
           />
         </section>
 
-        {/* --- Bento chart grid --- */}
-        <section className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3 lg:auto-rows-[minmax(0,1fr)]">
-          <Panel title="Budget by category" className="lg:col-span-2 lg:row-span-2">
-            <ChartCanvas config={categoryConfig} ariaLabel="Budget by category" />
+        {/* --- Bento grid: map + charts --- */}
+        <section className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4 lg:grid-rows-3 lg:auto-rows-[minmax(0,1fr)]">
+          <Panel title="Region" className="lg:col-span-1 lg:row-span-3">
+            <RegionMap
+              regions={regions}
+              selected={filters.region}
+              onSelect={(r) => patch({ region: r })}
+            />
           </Panel>
+          {byCategory.length > 1 && (
+            <Panel title="Budget by category" className="lg:col-span-2 lg:row-span-2">
+              <ChartCanvas config={categoryConfig} ariaLabel="Budget by category" />
+            </Panel>
+          )}
           <Panel title="Projects by status">
             <ChartCanvas config={statusConfig} ariaLabel="Projects by status" />
           </Panel>
