@@ -1,0 +1,18 @@
+{
+  "name": "kiro-ph-data-pipeline-etl",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "DuckDB-based ETL pipeline for the DPWH transparency dataset. Reads raw Parquet, cleans/aggregates with SQL, emits tidy Parquet for the dashboard.",
+  "scripts": {
+    "download": "node src/download.mjs",
+    "audit": "node src/audit.mjs",
+    "clean": "node src/clean.mjs",
+    "pipeline": "node src/pipeline.mjs",
+    "start": "npm run download && npm run clean && npm run pipeline"
+  },
+  "license": "CC0-1.0",
+  "dependencies": {
+    "duckdb": "^1.4.4"
+  }
+}

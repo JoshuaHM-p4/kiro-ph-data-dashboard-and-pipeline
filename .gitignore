@@ -1,0 +1,7 @@
+# Monorepo root. Each package also has its own .gitignore.
+node_modules/
+.DS_Store
+
+# pipeline artifacts
+pipeline/data/raw/
+pipeline/data/out/
